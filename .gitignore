@@ -29,4 +29,6 @@ dist/
 *.xlsm
 *.bcf
 *.docx
-
+*.doc
+*.xls
+*.txt

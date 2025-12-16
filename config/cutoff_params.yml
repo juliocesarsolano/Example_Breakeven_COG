@@ -1,0 +1,148 @@
+# =============================================================================
+# PV CUT-OFF GRADE – GOVERNED CONSTANTS (EXCEL/BCF-ALIGNED)
+# Break-even: Block Value (USD/t) = 0 with Ag fixed at 0 g/t
+#
+# This configuration includes:
+# - Exact flotation recovery chain (BCF)
+# - Exact sulfur-variable process cost (BCF)
+# - Full per-tonne cost stack used in the Excel Summary table
+# =============================================================================
+
+metadata:
+  workbook_source: "PV_R&R2025 _PV Block Value Calculation - By MetType.xlsx"
+  validation_script_source: "2.LTP_Costs_2025_MY_Reserve.bcf"
+  generated_on: "2025-12-13"
+  by: "Julio Solano A."
+  unit_system: "metric"
+  notes:
+    - Cost components reflect the Excel 'Incremental Mining/TSF/Process/Closure/Sustaining' stack.
+    - Where Excel uses intermediate cells (e.g., TSF components), we store the underlying terms.
+
+economic_parameters:
+  metal_prices:
+    AUP1_usd_per_oz_reserve: 1500.0
+    AGP1_usd_per_oz_reserve: 21.0
+    AUP2_usd_per_oz_resource: 2000.0
+    AGP2_usd_per_oz_resource: 25.0
+    CUP1_usd_per_lb_reserve: 0.0
+    AUP2_usd_per_oz_resource: 2000.0
+    AGP2_usd_per_oz_resource: 25.0
+    CUP2_usd_per_lb_resource: 0.0
+
+  refining_transport_costs:
+    RAU1_usd_per_oz: 0.5
+    RAG1_usd_per_oz: 0.5
+    RCU1_usd_per_lb: 0.0
+
+  royalties:
+    RYT_fraction_of_net_price: 0.032
+
+  power:
+    P_usd_per_kwh: 0.0791
+
+  unit_conversions:
+    Gr_Oz_g_per_oz: 31.1034768
+    Lb_Tn_lb_per_tonne: 2204.622622
+
+metallurgical_models:
+  global:
+    fact7_recovery_reduction_factor_pctpts: 1.6
+
+  pox_cil:
+    ACco_Au_gt: 5.41
+    ACco_Ag_gt: 30.0
+    gold:
+      fact1_intercept_pct: 89.0
+      fact2_slope_pct_per_gt: 0.9
+      fact3_max_pct: 93.8
+    silver:
+      fact4_intercept_pct: 72.4
+      fact5_slope_pct_per_gt: 0.19
+      fact6_max_pct: 78.1
+
+  flotation:
+    mass_pull:
+      MPisa_slope: 2.02
+      MPisb_intercept: 25.0
+    Tailsrec_fraction: 0.34
+
+    gold_recovery_constants_by_mettype:
+      mobs: { Fa: 0.586, Fb: 0.202, Fc: -7.5,  Fd: 78.25 }
+      mnbs: { Fa: 0.586, Fb: 0.202, Fc: -7.5,  Fd: 78.25 }
+      movc: { Fa: 0.184, Fb: 0.202, Fc: -7.5,  Fd: 93.18 }
+      mnvc: { Fa: 0.184, Fb: 0.202, Fc: -7.5,  Fd: 93.18 }
+      mnsp: { Fa: 0.152, Fb: 0.139, Fc: -5.18, Fd: 94.38 }
+      def:  { Fa: 0.241, Fb: 0.666, Fc: -24.62, Fd: 91.11 }
+
+cost_parameters:
+  # --- Incremental mining cost in Excel is (Waste - Ore) on a $/t basis
+  mining:
+    ore_mining_usd_per_t: 3.1974
+    waste_mining_usd_per_t: 3.6822
+    additional_mining_adjustment_usd_per_t: 0.5224  # Excel cell C170
+
+  rehandle:
+    ore_rehandle_usd_per_t: 2.2614
+
+  tsf:
+    tsf_ore_component_usd_per_t: 5.959  # Excel cell C165
+    tsf_waste_component_usd_per_t: 2.2480 # Excel cell C166
+
+  process_variable_cost:
+    # Exact BCF polynomial; s = S_total% / 100
+    FLO_coefficients:
+      C_FLO: -1911.22
+      D_FLO: 857.27
+      E_FLO: -128.24
+      F_FLO: 11.236
+      G_FLO: 6.830
+      K_FLO: 0.0
+      L_FLO: 0.0
+      M_FLO: 794.98
+      N_FLO: 22.33
+    POX_coefficients:
+      C_POX: 301.74818
+      D_POX: -83.70399
+      E_POX: 8.3786
+      F_POX: 16.8411
+      G_POX: 8.27768
+      K_POX: 80.17873
+      L_POX: -16.7389
+      M_POX: 824.58128
+      N_POX: 31.03775
+
+  process_fixed_cost:
+    process_fixed_usd_per_t: 17.7350
+
+  limestone:
+    limestone_usd_per_t: 2.8267 # $/t ore processed
+
+  other_process_allocation:
+    allocation_usd_per_t: -0.15 # $/t ore processed
+
+  g_and_a:
+    g_and_a_usd_per_t: 3.5810
+
+  csr:
+    csr_usd_per_t: 0.1592
+
+  closure:
+    closure_usd_per_t: 1.0429
+
+  sustaining_capital:
+    ore_sustaining_usd_per_t: 0.6663
+
+  s_pct_fixed_costs:
+    coefficient: 0.0684  # Excel C202 (Sulphide Oxidised/t Processed, t/t)
+    oxidised_sulfur_terms:
+      term1: 0.0
+      term2: 0.0
+      term3: 0.0
+    # In Excel current sum(term1..term3)=0, so this component is 0.
+
+mettypes:
+  mnbs: { excel_sheet_name: "Summary", rocktype_code: "mobs" }
+  mnsp: { excel_sheet_name: "Summary", rocktype_code: "mnsp" }
+  mnvc: { excel_sheet_name: "Summary", rocktype_code: "mnvc" }
+  mobs: { excel_sheet_name: "Summary", rocktype_code: "mobs" }
+  movc: { excel_sheet_name: "Summary", rocktype_code: "movc" }

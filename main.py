@@ -537,7 +537,7 @@ with tab_solver:
             **About this Web App**
             
             - Developed by **Julio César Solano Arroyo**  
-              MRM Superintendent  
+              Mineral Resource Superintendent  
               *Development date: 13 December 2025*
 
             - Application designed to compute **breakeven Au cut-off grades** by MetType using a

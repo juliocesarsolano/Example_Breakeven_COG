@@ -144,7 +144,7 @@ It is **not** intended to distribute proprietary cost data or official LTP input
 ## Developer
 
 **Julio César Solano Arroyo**  
-MRM Superintendent  
+Mineral Resource Superintendent  
 
 Development date: **13 December 2025**
 

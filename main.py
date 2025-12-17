@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict
 
-import streamlit as st
-import pandas as pd
 import altair as alt
+import pandas as pd
+import streamlit as st
 
-from src.config import load_config, deep_update, rocktype_code
+from src.config import deep_update, load_config, rocktype_code
 from src.economics import BlockInputs, compute_block_value
 from src.solver import solve_bisection, solve_brent
 
@@ -17,15 +19,96 @@ from src.solver import solve_bisection, solve_brent
 # Page configuration
 # =============================================================================
 st.set_page_config(
-    page_title="PV Breakeven Cut-Off Grade (Au) by MetType",
+    page_title="Breakeven Cut-Off Grade (Au) by RockType",
     layout="wide",
 )
 
-st.title("PV Breakeven Cut-Off Grade (Au) by MetType (with Ag grade 0.0)")
+st.title("Breakeven Cut-Off Grade (Au) by RockType (with Ag grade 0.0)")
 st.caption(
     "Optimisation methods available: Deterministic Bisection and Brent's Method "
     "(hybrid root-finder)."
 )
+
+
+# =============================================================================
+# Helpers
+# =============================================================================
+def _cfg_fingerprint(d: Dict[str, Any]) -> str:
+    """Stable fingerprint for caching. Does not change results."""
+    try:
+        payload = json.dumps(d, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    except TypeError:
+        # Fallback: string repr; still stable enough for our use-case
+        payload = repr(d).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+@st.cache_data(show_spinner=False)
+def _cached_block_value_usd_per_t(
+    cfg_fp: str,
+    cfg_run: Dict[str, Any],
+    rock: int,
+    route: str,
+    combined_frac: float,
+    au_gt: float,
+    cu_pct: float,
+    s_total_pct: float,
+    s2_pct: float,
+    dilution_pct: float,
+) -> float:
+    """
+    Cache wrapper around compute_block_value.
+    This does not change results; it only avoids repeated recomputation.
+    """
+    blk = BlockInputs(
+        au_gt=float(au_gt),
+        ag_gt=0.0,
+        cu_pct=float(cu_pct),
+        s_total_pct=float(s_total_pct),
+        s2_pct=float(s2_pct),
+        dilution_pct=float(dilution_pct),
+    )
+    out = compute_block_value(
+        cfg_run,
+        rocktype_code=rock,
+        block=blk,
+        route=route,
+        combined_flo_fraction=float(combined_frac),
+    )
+    return float(out.block_value_usd_per_t)
+
+
+def _solve_root(f, a: float, b: float, tol_f: float, max_iter: int, record_history: bool):
+    if opt_method.startswith("Bisection"):
+        return solve_bisection(
+            f,
+            a,
+            b,
+            tol_f=float(tol_f),
+            max_iter=int(max_iter),
+            record_history=bool(record_history),
+        )
+    return solve_brent(
+        f,
+        a,
+        b,
+        tol_f=float(tol_f),
+        max_iter=int(max_iter),
+        record_history=bool(record_history),
+    )
+
+
+def _bracket_root_expand_upper(f, a: float, b: float, max_expand: int, expand_mult: float):
+    """Keep your original behavior: expand only upper bound until sign change or max_expand."""
+    fa = f(a)
+    fb = f(b)
+    expand = 0
+    while fa * fb > 0 and expand < max_expand:
+        b = max(0.1, b * expand_mult)
+        fb = f(b)
+        expand += 1
+    return a, b, fa, fb, expand
+
 
 # =============================================================================
 # Sidebar – configuration and inputs
@@ -33,17 +116,28 @@ st.caption(
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_CFG = PROJECT_ROOT / "config" / "cutoff_params.yml"
 
-cfg_path = st.sidebar.text_input(
-    "YAML config path",
-    str(DEFAULT_CFG),
-)
-cfg = load_config(cfg_path)
+cfg_path = st.sidebar.text_input("YAML config path", str(DEFAULT_CFG), key="cfg_path")
 
-# --- MetType
+try:
+    cfg = load_config(cfg_path)
+except Exception as e:
+    st.sidebar.error(f"Could not load config: {e}")
+    st.stop()
+
+# --- MetType (safe default)
+mettypes = list(cfg.get("mettypes", {}).keys())
+if not mettypes:
+    st.sidebar.error("No mettypes found in config under key: mettypes")
+    st.stop()
+
+default_mt = "movc"
+default_ix = mettypes.index(default_mt) if default_mt in mettypes else 0
+
 mettype_key = st.sidebar.selectbox(
     "MetType",
-    options=list(cfg["mettypes"].keys()),
-    index=list(cfg["mettypes"].keys()).index("movc"),
+    options=mettypes,
+    index=default_ix,
+    key="mettype_key",
 )
 rock = rocktype_code(cfg, mettype_key)
 
@@ -53,6 +147,7 @@ route_label = st.sidebar.radio(
     "Route",
     options=["FLO", "POX", "Combined FLO/POX"],
     index=0,  # FLO default for Excel Summary parity
+    key="route_label",
 )
 
 route_token = "COMBINED" if route_label.startswith("Combined") else route_label
@@ -68,6 +163,7 @@ if route_token == "COMBINED":
         value=0.60,
         step=0.05,
         format="%.2f",
+        key="combined_flo_fraction",
     )
     st.sidebar.caption(
         f"Split: {combined_flo_fraction:.0%} FLO / {1.0 - combined_flo_fraction:.0%} POX"
@@ -82,6 +178,7 @@ cu_pct = st.sidebar.number_input(
     max_value=100.0,
     value=0.089,
     format="%.3f",
+    key="cu_pct",
 )
 
 s_total_pct = st.sidebar.number_input(
@@ -90,6 +187,7 @@ s_total_pct = st.sidebar.number_input(
     max_value=11.342,
     value=8.707,
     format="%.3f",
+    key="s_total_pct",
 )
 
 s2_pct = st.sidebar.number_input(
@@ -98,6 +196,7 @@ s2_pct = st.sidebar.number_input(
     max_value=10.276,
     value=7.140,
     format="%.3f",
+    key="s2_pct",
 )
 
 dilution_pct = st.sidebar.number_input(
@@ -106,6 +205,7 @@ dilution_pct = st.sidebar.number_input(
     max_value=100.0,
     value=0.0,
     format="%.3f",
+    key="dilution_pct",
 )
 
 # --- Reserve vs Resource context
@@ -116,6 +216,7 @@ cutoff_context = st.sidebar.radio(
         "Resource (Au price = 2000 USD/oz)",
     ],
     index=0,
+    key="cutoff_context",
 )
 default_au_price = 1500.0 if cutoff_context.startswith("Reserve") else 2000.0
 
@@ -136,15 +237,18 @@ au_price = st.sidebar.number_input(
     step=10.0,
     key="au_price",
 )
+
 power = st.sidebar.number_input(
     "Power cost P (USD/kWh)",
     value=float(cfg["economic_parameters"]["power"]["P_usd_per_kwh"]),
     format="%.5f",
+    key="power_cost",
 )
 royalty = st.sidebar.number_input(
     "Royalty RYT (fraction)",
     value=float(cfg["economic_parameters"]["royalties"]["RYT_fraction_of_net_price"]),
     format="%.4f",
+    key="royalty_fraction",
 )
 
 # --- Output precision
@@ -157,9 +261,10 @@ opt_method = st.sidebar.radio(
     "Root finder",
     options=["Bisection (deterministic)", "Brent (hybrid)"],
     index=1,
+    key="opt_method",
 )
 
-# --- Apply overrides
+# --- Apply overrides (same semantics as your current version)
 cfg_run = deep_update(
     cfg,
     {
@@ -171,17 +276,19 @@ cfg_run = deep_update(
     },
 )
 
+cfg_fp = _cfg_fingerprint(cfg_run)
+
 # =============================================================================
 # Read-only reference panel
 # =============================================================================
 st.sidebar.divider()
-show_ref = st.sidebar.checkbox("Show Reference Parameters (read-only)", value=True)
+show_ref = st.sidebar.checkbox("Show Reference Parameters (read-only)", value=True, key="show_ref")
 
 if show_ref:
     st.sidebar.subheader("Reference Parameters (from YAML)")
 
     try:
-        cfg_bytes = open(cfg_path, "rb").read()
+        cfg_bytes = Path(cfg_path).read_bytes()
         cfg_sha256 = hashlib.sha256(cfg_bytes).hexdigest()
     except Exception:
         cfg_sha256 = "N/A"
@@ -205,6 +312,7 @@ if show_ref:
     st.sidebar.write(f"S2: {s2_pct:.3f} %")
     st.sidebar.write(f"Dilution: {dilution_pct:.3f} %")
 
+# Header
 if route_token == "COMBINED":
     st.subheader(
         f'MetType Selected: "{mettype_key}" | Route: COMBINED '
@@ -249,22 +357,6 @@ Silver grade is fixed at **0.0 g/t** to isolate the Au-driven break-even conditi
 tab_solver, tab_summary = st.tabs(["Cut-off Solver", "Summary Table by MetType"])
 
 
-def solve_root(f, a, b, tol_f, max_iter, record_history):
-    if opt_method.startswith("Bisection"):
-        return solve_bisection(
-            f, a, b,
-            tol_f=float(tol_f),
-            max_iter=int(max_iter),
-            record_history=record_history,
-        )
-    return solve_brent(
-        f, a, b,
-        tol_f=float(tol_f),
-        max_iter=int(max_iter),
-        record_history=record_history,
-    )
-
-
 # =============================================================================
 # Cut-off solver tab
 # =============================================================================
@@ -273,12 +365,12 @@ with tab_solver:
 
     with col1:
         st.markdown("### Solve cut-off Au (g/t)")
-        x_low = st.number_input("Initial Au low (g/t)", value=0.0, step=0.1)
-        x_high = st.number_input("Initial Au high (g/t)", value=20.0, step=0.5)
-        tol_f = st.number_input("Tolerance |BV| ($/t)", value=1e-4, format="%.1e")
-        max_iter = st.number_input("Max iterations", value=200, step=10)
+        x_low = st.number_input("Initial Au low (g/t)", value=0.0, step=0.1, key="x_low")
+        x_high = st.number_input("Initial Au high (g/t)", value=20.0, step=0.5, key="x_high")
+        tol_f = st.number_input("Tolerance |BV| ($/t)", value=1e-4, format="%.1e", key="tol_f")
+        max_iter = st.number_input("Max iterations", value=200, step=10, key="max_iter")
 
-        if st.button("Calculate cut-off"):
+        if st.button("Calculate cut-off", key="btn_calc_cutoff"):
             base_block = BlockInputs(
                 au_gt=0.0,
                 ag_gt=0.0,
@@ -289,37 +381,41 @@ with tab_solver:
             )
 
             def f(au_gt: float) -> float:
-                blk = BlockInputs(**{**base_block.__dict__, "au_gt": au_gt})
-                out = compute_block_value(
-                    cfg_run,
-                    rocktype_code=rock,
-                    block=blk,
+                return _cached_block_value_usd_per_t(
+                    cfg_fp=cfg_fp,
+                    cfg_run=cfg_run,
+                    rock=rock,
                     route=route_token,
-                    combined_flo_fraction=combined_flo_fraction,
+                    combined_frac=combined_flo_fraction,
+                    au_gt=float(au_gt),
+                    cu_pct=cu_pct,
+                    s_total_pct=s_total_pct,
+                    s2_pct=s2_pct,
+                    dilution_pct=dilution_pct,
                 )
-                return out.block_value_usd_per_t
 
             a, b = float(x_low), float(x_high)
-            fa, fb = f(a), f(b)
-            expand = 0
-            while fa * fb > 0 and expand < 20:
-                b = max(0.1, b * 1.5)
-                fb = f(b)
-                expand += 1
+            a, b, fa, fb, _ = _bracket_root_expand_upper(f, a, b, max_expand=20, expand_mult=1.5)
 
             if fa * fb > 0:
-                st.error("Could not bracket a root. Increase upper bound or review inputs.")
+                st.error(
+                    "Could not bracket a root. Increase upper bound or review inputs. "
+                    f"f({a:.3f})={fa:.6f}, f({b:.3f})={fb:.6f}"
+                )
             else:
-                res = solve_root(
-                    f, a, b,
-                    tol_f=tol_f,
-                    max_iter=max_iter,
+                res = _solve_root(
+                    f,
+                    a,
+                    b,
+                    tol_f=float(tol_f),
+                    max_iter=int(max_iter),
                     record_history=True,
                 )
 
                 st.success(f"Au cut-off = {res.root:.3f} g/t (BV = {res.f_root:.5f} $/t)")
 
-                blk_star = BlockInputs(**{**base_block.__dict__, "au_gt": res.root})
+                # Compute full output at solution (no caching here; unchanged behavior)
+                blk_star = BlockInputs(**{**base_block.__dict__, "au_gt": float(res.root)})
                 out = compute_block_value(
                     cfg_run,
                     rocktype_code=rock,
@@ -329,14 +425,18 @@ with tab_solver:
                 )
 
                 st.dataframe(
-                    pd.DataFrame([{
-                        "Route": out.route_used,
-                        "Au_diluted_gpt": out.au_gt_diluted,
-                        "Au_recovery_fraction": out.au_recovery_fraction,
-                        "Revenue_usd_per_t": out.revenue_usd_per_t,
-                        "TotalCost_usd_per_t": out.total_cost_usd_per_t,
-                        "BlockValue_usd_per_t": out.block_value_usd_per_t,
-                    }]),
+                    pd.DataFrame(
+                        [
+                            {
+                                "Route": out.route_used,
+                                "Au_diluted_gpt": out.au_gt_diluted,
+                                "Au_recovery_fraction": out.au_recovery_fraction,
+                                "Revenue_usd_per_t": out.revenue_usd_per_t,
+                                "TotalCost_usd_per_t": out.total_cost_usd_per_t,
+                                "BlockValue_usd_per_t": out.block_value_usd_per_t,
+                            }
+                        ]
+                    ),
                     use_container_width=True,
                 )
 
@@ -369,7 +469,7 @@ with tab_solver:
                         xh = None
                         fh = None
 
-                        # 1) IterationPoint-like object with attributes (your case)
+                        # 1) IterationPoint-like object with attributes
                         if hasattr(h, "x") and hasattr(h, "fx"):
                             xh = _to_float(getattr(h, "x", None))
                             fh = _to_float(getattr(h, "fx", None))
@@ -406,23 +506,22 @@ with tab_solver:
                             st.write("History type:", type(hist))
                             st.write("First item type:", type(hist[0]) if len(hist) else None)
                             st.write("First item value:", hist[0] if len(hist) else None)
-                        st.error(
-                            "Iteration history exists, but it could not be parsed into (iteration, BV)."
-                        )
+                        st.error("Iteration history exists, but it could not be parsed into (iteration, BV).")
                     else:
                         df_hist = pd.DataFrame(rows).sort_values("iter")
 
-                        bv_iter_chart = alt.Chart(df_hist).mark_line(
-                            color="#D4AF37",  # gold
-                            point=True
-                        ).encode(
-                            x=alt.X("iter:Q", title="Iteration"),
-                            y=alt.Y("BV_usd_per_t:Q", title="Block Value (USD/t)"),
-                            tooltip=[
-                                alt.Tooltip("iter:Q", title="Iteration"),
-                                alt.Tooltip("Au_gpt:Q", title="Au (g/t)", format=",.6f"),
-                                alt.Tooltip("BV_usd_per_t:Q", title="BV (USD/t)", format=",.6f"),
-                            ],
+                        bv_iter_chart = (
+                            alt.Chart(df_hist)
+                            .mark_line(point=True)
+                            .encode(
+                                x=alt.X("iter:Q", title="Iteration"),
+                                y=alt.Y("BV_usd_per_t:Q", title="Block Value (USD/t)"),
+                                tooltip=[
+                                    alt.Tooltip("iter:Q", title="Iteration"),
+                                    alt.Tooltip("Au_gpt:Q", title="Au (g/t)", format=",.6f"),
+                                    alt.Tooltip("BV_usd_per_t:Q", title="BV (USD/t)", format=",.6f"),
+                                ],
+                            )
                         )
 
                         zero_rule = alt.Chart(pd.DataFrame({"y": [0.0]})).mark_rule().encode(y="y:Q")
@@ -432,14 +531,13 @@ with tab_solver:
                             use_container_width=True,
                         )
 
-
     with col2:
         st.markdown(
             """
             **About this Web App**
             
             - Developed by **Julio César Solano Arroyo**  
-              MRM Superintendent   
+              MRM Superintendent  
               *Development date: 13 December 2025*
 
             - Application designed to compute **breakeven Au cut-off grades** by MetType using a
@@ -460,13 +558,13 @@ with tab_solver:
               no intermediate rounding is applied during optimisation.
 
             - Economic inputs (metal prices, royalties, power) are centrally governed via **YAML configuration**
-             and scenario overrides are explicitly logged.
+              and scenario overrides are explicitly logged.
 
             - Block-level variables (S%, S2%, dilution, Cu%) are treated as **explicit block descriptors**,
               ensuring transparency and reproducibility.
 
             - Designed for **technical governance**, traceability, and extension to future resource/reserve
-            scenarios and processing configurations.
+              scenarios and processing configurations.
             """
         )
 
@@ -477,8 +575,9 @@ with tab_summary:
     st.markdown("### Summary Table by MetType")
     st.write(f"Break-even Au cut-off for each MetType (Route = {route_token}).")
 
-    if st.button("Run Summary (all mettypes)"):
+    if st.button("Run Summary (all mettypes)", key="btn_run_summary"):
         results = []
+
         base_block = BlockInputs(
             au_gt=0.0,
             ag_gt=0.0,
@@ -492,40 +591,42 @@ with tab_summary:
             rock_mt = rocktype_code(cfg, mt)
 
             def f_mt(au_gt: float) -> float:
-                blk = BlockInputs(**{**base_block.__dict__, "au_gt": au_gt})
-                out = compute_block_value(
-                    cfg_run,
-                    rocktype_code=rock_mt,
-                    block=blk,
+                return _cached_block_value_usd_per_t(
+                    cfg_fp=cfg_fp,
+                    cfg_run=cfg_run,
+                    rock=rock_mt,
                     route=route_token,
-                    combined_flo_fraction=combined_flo_fraction,
+                    combined_frac=combined_flo_fraction,
+                    au_gt=float(au_gt),
+                    cu_pct=cu_pct,
+                    s_total_pct=s_total_pct,
+                    s2_pct=s2_pct,
+                    dilution_pct=dilution_pct,
                 )
-                return out.block_value_usd_per_t
 
             a, b = 0.0, 5.0
-            fa, fb = f_mt(a), f_mt(b)
-            expand = 0
-            while fa * fb > 0 and expand < 25:
-                b = max(0.1, b * 1.5)
-                fb = f_mt(b)
-                expand += 1
+            a, b, fa, fb, _ = _bracket_root_expand_upper(f_mt, a, b, max_expand=25, expand_mult=1.5)
 
             if fa * fb > 0:
                 cutoff = None
             else:
-                res = solve_root(
-                    f_mt, a, b,
+                res = _solve_root(
+                    f_mt,
+                    a,
+                    b,
                     tol_f=1e-4,
                     max_iter=250,
                     record_history=False,
                 )
-                cutoff = res.root
+                cutoff = float(res.root)
 
-            results.append({
-                "MetType": mt,
-                "Route": route_token,
-                "Au_cutoff_gpt": None if cutoff is None else round(cutoff, 3),
-            })
+            results.append(
+                {
+                    "MetType": mt,
+                    "Route": route_token,
+                    "Au_cutoff_gpt": None if cutoff is None else round(cutoff, 3),
+                }
+            )
 
         df = pd.DataFrame(results)
         st.dataframe(df, use_container_width=True)
@@ -540,11 +641,15 @@ with tab_summary:
         df_plot = df.dropna(subset=["Au_cutoff_gpt"]).copy()
         if not df_plot.empty:
             st.markdown("#### Plot: Au cut-off by MetType")
-            chart = alt.Chart(df_plot).mark_bar().encode(
-                x=alt.X("MetType:N", sort=None, title="MetType"),
-                y=alt.Y("Au_cutoff_gpt:Q", title="Au cut-off (g/t)"),
-                tooltip=["MetType:N", "Au_cutoff_gpt:Q"],
+            chart = (
+                alt.Chart(df_plot)
+                .mark_bar()
+                .encode(
+                    x=alt.X("MetType:N", sort=None, title="MetType"),
+                    y=alt.Y("Au_cutoff_gpt:Q", title="Au cut-off (g/t)"),
+                    tooltip=["MetType:N", "Au_cutoff_gpt:Q"],
+                )
             )
             st.altair_chart(chart.properties(height=280), use_container_width=True)
 
-# This script ends here.
+# End of script

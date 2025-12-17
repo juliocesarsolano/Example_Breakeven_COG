@@ -1,149 +1,156 @@
-# PV 2025 Cut-Off Grade (Streamlit)
+# Breakeven Cut-Off Grade (Au) — Streamlit App
 
-This application computes the **breakeven Au cut-off grade** as the gold grade (g/t) that makes the **block value (BV)** equal to zero for a selected processing route and block descriptors:
+This application computes the **breakeven gold (Au) cut-off grade** as the gold grade
+(g/t) that makes the **block value (BV)** equal to zero for a selected **MetType**,
+processing route, and block descriptors.
 
-\[
-BV(Au) = \text{Revenue}(Au) - \text{Total Ore Cost} \;=\; 0
-\]
+The app is implemented in **Streamlit** and is intended as a transparent,
+deterministic, and reproducible alternative to spreadsheet-based Goal Seek
+calculations.
 
-### Economics Included (USD/t)
+---
 
-The total ore cost is computed on a **per-tonne basis** and includes both variable and fixed components required for cut-off determination:
+## Break-even Definition
+
+The break-even cut-off grade is defined by the condition:
+
+BV(Au) = Revenue(Au) − Total Ore Cost = 0
+
+
+Where:
+- `Au` = gold grade (g/t)
+- `BV` = block value (USD per tonne)
+
+Silver grade is fixed at **0.0 g/t** in this implementation in order to isolate the
+gold-driven break-even condition.
+
+---
+
+## Economic Framework (USD/t)
+
+All calculations are performed on a **per-tonne basis**, consistent with standard
+cut-off grade methodology.
+
+The **Total Ore Cost** may include the following components, depending on the
+configuration:
 
 - Incremental **TSF** cost  
 - **Process fixed cost**  
-- **G&A** cost  
+- **General & Administrative (G&A)** cost  
 - **CSR** cost  
 - **Ore sustaining capital**  
-- Optional **S% fixed-cost** term (if enabled in the configuration)
+- Optional **S% fixed-cost** term (if enabled in the YAML configuration)
 
-### Recovery and Route Logic
+Cost structures and parameters are sourced from the configured **LTP-style economic
+model** and are applied consistently across all processing routes.
 
-Revenue is calculated from recovered gold ounces per tonne, based on the selected processing route:
+---
 
-- **FLO**: flotation recovery chain and FLO cost stack  
-- **POX**: POX recovery chain and POX cost stack  
-- **COMBINED**: linear blend of FLO and POX recoveries and costs using a user-defined split
+## Recovery and Processing Routes
+
+Revenue is calculated from recovered gold ounces per tonne based on the selected
+processing route:
+
+- **FLO**  
+  Flotation recovery chain and FLO cost stack.
+
+- **POX**  
+  POX–CIL recovery chain and POX cost stack.
+
+- **COMBINED (FLO / POX)**  
+  Linear blend of FLO and POX recoveries and costs using a user-defined split
+  (e.g. 60% FLO / 40% POX).
 
 For FLO, the recovery chain follows the structure:
 
-- `recF / MP / Au_conc / aurecFLO`
+recF / MP / Au_conc / aurecFLO
 
-Sulphur-dependent variable costs are computed from the configured sulphur terms and applied according to the selected route.
-
-### Numerical Solution
-
-The breakeven cut-off is obtained by solving for the root of \(BV(Au)\) using a robust 1-D root-finding algorithm:
-
-- **Bisection** (deterministic and robust)
-- **Brent** (hybrid and efficient)
-
-The solver iterates until \(|BV|\) meets the selected tolerance, and the application can display a convergence plot (**BV vs Iteration**) for QA/QC.
-
-## Processing Routes and Cut-off Calculation (FLO, POX, COMBINED)
-
-This application computes the **breakeven Au cut-off grade** as the gold grade (g/t) that makes the **block value (BV)** equal to zero:
-
-\[
-BV(g) = \text{Revenue}(g) - \text{Total Ore Cost}(g) = 0
-\]
-
-Where \(g\) is the Au grade (g/t). All calculations are performed on a **per-tonne basis (USD/t)**.
-
-### Route Options
-
-#### 1) FLO (Flotation)
-
-**Assumption:** 100% of the selected material is processed through the **FLO** route.
-
-- **Revenue (USD/t):** computed from recovered gold ounces per tonne using the **FLO recovery chain**.
-- **Costs (USD/t):** computed using the **FLO cost stack**, including applicable fixed and variable terms.
-
-The breakeven cut-off is obtained by solving:
-
-\[
-BV_{\text{FLO}}(g) = 0
-\]
+Sulphur-dependent variable costs are computed from the configured sulphur terms
+(S%, S2%) and applied according to the selected route.
 
 ---
 
-#### 2) POX (Pressure Oxidation + downstream recovery)
+## Numerical Solution
 
-**Assumption:** 100% of the selected material is processed through the **POX** route.
+The breakeven cut-off grade is obtained by solving the scalar equation:
 
-- **Revenue (USD/t):** computed from recovered gold ounces per tonne using the **POX recovery chain**.
-- **Costs (USD/t):** computed using the **POX cost stack**, including applicable fixed and variable terms.
+BV(Au) = 0
 
-The breakeven cut-off is obtained by solving:
 
-\[
-BV_{\text{POX}}(g) = 0
-\]
+using robust one-dimensional root-finding algorithms:
 
----
+- **Bisection**  
+  Deterministic and robust.
 
-#### 3) COMBINED (FLO/POX split)
+- **Brent’s Method**  
+  Hybrid method combining bisection, secant, and inverse quadratic interpolation,
+  with behaviour similar to Excel Goal Seek but fully deterministic.
 
-**Assumption:** the selected material is split between FLO and POX using a constant fraction:
+The solver iterates until:
 
-- \(w\) = fraction to FLO = `combined_flo_fraction`
-- \(1-w\) = fraction to POX
+|BV| ≤ tolerance
 
-For a given grade \(g\), the application computes both route economics and then applies a **linear blend** of revenues and costs:
 
-\[
-\text{Revenue}_{\text{COMB}}(g) = w\cdot \text{Revenue}_{\text{FLO}}(g) + (1-w)\cdot \text{Revenue}_{\text{POX}}(g)
-\]
-
-\[
-\text{Cost}_{\text{COMB}}(g) = w\cdot \text{Cost}_{\text{FLO}}(g) + (1-w)\cdot \text{Cost}_{\text{POX}}(g)
-\]
-
-\[
-BV_{\text{COMB}}(g) = \text{Revenue}_{\text{COMB}}(g) - \text{Cost}_{\text{COMB}}(g)
-\]
-
-The breakeven cut-off is obtained by solving:
-
-\[
-BV_{\text{COMB}}(g) = 0
-\]
-
-**Important:** in general, the combined cut-off is **not** the weighted average of the individual cut-offs:
-
-\[
-g_{CO}^{\text{COMB}} \neq w\cdot g_{CO}^{\text{FLO}} + (1-w)\cdot g_{CO}^{\text{POX}}
-\]
-
-because the root of a weighted sum of functions is not equal to the weighted sum of the individual roots.
+Optionally, the application displays a **convergence plot (BV vs iteration)** to
+support QA/QC and numerical traceability.
 
 ---
 
-### Shared Modeling Assumptions (all routes)
+## Configuration and Inputs
 
-- **Unit basis:** all economics are computed in **USD/t** and depend on the selected block descriptors (e.g., Cu%, Total S%, S2%, dilution%).
-- **Ag grade:** fixed at **0.0 g/t** to isolate the Au-driven breakeven condition.
-- **Economic parameters:** metal price, royalty, power cost, and other parameters are sourced from the configuration and can be overridden in the UI.
-- **Numerical solution:** the cut-off is found by solving \(BV(g)=0\) using a 1-D root finder (**Bisection** or **Brent**) until the specified tolerance on \(|BV|\) is met.
+### Configuration
+- Economic parameters, recoveries, costs, and MetType definitions are controlled
+  via a **YAML configuration file**.
+- Scenario overrides (Au price, power cost, royalty) are applied at runtime and
+  clearly separated from baseline configuration values.
 
-Run:
-```bash
-py -m pip install -r requirements.txt
-py -m streamlit run main.py
-```
+### Block Descriptors
+The following block-level variables are explicitly defined by the user:
+- Cu (%)
+- Total S (%)
+- S2 (%)
+- Dilution (%)
 
-#### 4) Build the Executable
-# build_exe.ps1. Se corre en powershell: powershell -ExecutionPolicy Bypass -File .\build_exe.ps1
-# Nota: en la carpeta dist debe quedar el .exe
- 
-$ErrorActionPreference = "Stop"
+These inputs are treated as **explicit block descriptors**, ensuring transparency
+and reproducibility of results.
 
-python -m PyInstaller --noconfirm --onefile --windowed --name PV_Cutoff_Grade `
-  --add-data "main.py;." `
-  --add-data "src;src" `
-  --add-data "config;config" `
-  --collect-all streamlit `
-  .\desktop_app.py
+---
 
-Write-Host ""
-Write-Host "Build finalizado. Revisa: .\dist\PV_Cutoff_Grade.exe"
+## Application Features
+
+- Deterministic cut-off grade calculation by MetType
+- Support for FLO, POX, and Combined processing routes
+- Full floating-point precision (no intermediate rounding during optimisation)
+- Reproducible configuration via YAML
+- Solver convergence diagnostics
+- Summary table of cut-off grades across all MetTypes
+
+---
+
+## Intended Use
+
+This repository is provided as an **example / demonstration implementation** of a
+cut-off grade calculation workflow.
+
+It is suitable for:
+- Technical validation and QA/QC
+- Training and methodology demonstrations
+- Replacement of spreadsheet-based Goal Seek calculations
+
+It is **not** intended to distribute proprietary cost data or official LTP inputs.
+
+---
+
+## Developer
+
+**Julio César Solano Arroyo**  
+MRM Superintendent  
+
+Development date: **13 December 2025**
+
+---
+
+## License
+
+This project is provided for demonstration and educational purposes.
+Please refer to the `LICENSE` file for details.

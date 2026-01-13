@@ -572,12 +572,10 @@ with tab_solver:
 # Summary table tab
 # =============================================================================
 with tab_summary:
-    st.markdown("### Summary Table by MetType")
-    st.write(f"Break-even Au cut-off for each MetType (Route = {route_token}).")
+    st.markdown("### Summary Tables by MetType (FLO 100% and POX 100%)")
+    st.write("Break-even Au cut-off and Au recovery at cut-off for each MetType.")
 
-    if st.button("Run Summary (all mettypes)", key="btn_run_summary"):
-        results = []
-
+    if st.button("Run Summary (FLO & POX)", key="btn_run_summary_flo_pox"):
         base_block = BlockInputs(
             au_gt=0.0,
             ag_gt=0.0,
@@ -587,29 +585,45 @@ with tab_summary:
             dilution_pct=dilution_pct,
         )
 
-        for mt in cfg["mettypes"].keys():
-            rock_mt = rocktype_code(cfg, mt)
+        def run_table_for_route(route_fixed: str) -> pd.DataFrame:
+            results = []
 
-            def f_mt(au_gt: float) -> float:
-                return _cached_block_value_usd_per_t(
-                    cfg_fp=cfg_fp,
-                    cfg_run=cfg_run,
-                    rock=rock_mt,
-                    route=route_token,
-                    combined_frac=combined_flo_fraction,
-                    au_gt=float(au_gt),
-                    cu_pct=cu_pct,
-                    s_total_pct=s_total_pct,
-                    s2_pct=s2_pct,
-                    dilution_pct=dilution_pct,
+            for mt in cfg["mettypes"].keys():
+                rock_mt = rocktype_code(cfg, mt)
+
+                # Use cached BV calls for fast root finding
+                def f_mt(au_gt: float) -> float:
+                    return _cached_block_value_usd_per_t(
+                        cfg_fp=cfg_fp,
+                        cfg_run=cfg_run,
+                        rock=rock_mt,
+                        route=route_fixed,
+                        combined_frac=1.0,  # irrelevant when route is FLO/POX
+                        au_gt=float(au_gt),
+                        cu_pct=cu_pct,
+                        s_total_pct=s_total_pct,
+                        s2_pct=s2_pct,
+                        dilution_pct=dilution_pct,
+                    )
+
+                # Bracket root (same behavior: expand upper bound)
+                a, b = 0.0, 5.0
+                a, b, fa, fb, _ = _bracket_root_expand_upper(
+                    f_mt, a, b, max_expand=25, expand_mult=1.5
                 )
 
-            a, b = 0.0, 5.0
-            a, b, fa, fb, _ = _bracket_root_expand_upper(f_mt, a, b, max_expand=25, expand_mult=1.5)
+                if fa * fb > 0:
+                    results.append(
+                        {
+                            "MetType": mt,
+                            "Route": route_fixed,
+                            "Au_cutoff_gpt": None,
+                            "Au_recovery_at_cutoff_pct": None,
+                        }
+                    )
+                    continue
 
-            if fa * fb > 0:
-                cutoff = None
-            else:
+                # Solve cut-off
                 res = _solve_root(
                     f_mt,
                     a,
@@ -618,38 +632,80 @@ with tab_summary:
                     max_iter=250,
                     record_history=False,
                 )
-                cutoff = float(res.root)
+                au_co = float(res.root)
 
-            results.append(
-                {
-                    "MetType": mt,
-                    "Route": route_token,
-                    "Au_cutoff_gpt": None if cutoff is None else round(cutoff, 3),
-                }
-            )
+                # Evaluate full output at the solution to get recovery (no caching; deterministic)
+                blk_star = BlockInputs(**{**base_block.__dict__, "au_gt": au_co})
+                out_star = compute_block_value(
+                    cfg_run,
+                    rocktype_code=rock_mt,
+                    block=blk_star,
+                    route=route_fixed,
+                    combined_flo_fraction=1.0,
+                )
 
-        df = pd.DataFrame(results)
-        st.dataframe(df, use_container_width=True)
+                results.append(
+                    {
+                        "MetType": mt,
+                        "Route": route_fixed,
+                        "Au_cutoff_gpt": round(au_co, 3),
+                        "Au_recovery_at_cutoff_pct": round(
+                            float(out_star.au_recovery_fraction) * 100.0, 2
+                        ),
+                    }
+                )
 
-        if df["Au_cutoff_gpt"].notna().any():
+            return pd.DataFrame(results)
+
+        df_flo = run_table_for_route("FLO")
+        df_pox = run_table_for_route("POX")
+
+        # ---- FLO table + chart
+        st.markdown("#### FLO 100%")
+        st.dataframe(df_flo, use_container_width=True)
+
+        if df_flo["Au_cutoff_gpt"].notna().any():
             st.info(
-                f"Range: {df['Au_cutoff_gpt'].min():.3f} g/t – "
-                f"{df['Au_cutoff_gpt'].max():.3f} g/t"
+                f"FLO range: {df_flo['Au_cutoff_gpt'].min():.3f} g/t – "
+                f"{df_flo['Au_cutoff_gpt'].max():.3f} g/t"
             )
 
-        # Optional: Summary chart (Au cut-off by MetType)
-        df_plot = df.dropna(subset=["Au_cutoff_gpt"]).copy()
-        if not df_plot.empty:
-            st.markdown("#### Plot: Au cut-off by MetType")
-            chart = (
-                alt.Chart(df_plot)
+        df_flo_plot = df_flo.dropna(subset=["Au_cutoff_gpt"]).copy()
+        if not df_flo_plot.empty:
+            st.markdown("##### Plot: FLO Au cut-off by MetType")
+            chart_flo = (
+                alt.Chart(df_flo_plot)
                 .mark_bar()
                 .encode(
                     x=alt.X("MetType:N", sort=None, title="MetType"),
                     y=alt.Y("Au_cutoff_gpt:Q", title="Au cut-off (g/t)"),
-                    tooltip=["MetType:N", "Au_cutoff_gpt:Q"],
+                    tooltip=["MetType:N", "Au_cutoff_gpt:Q", "Au_recovery_at_cutoff_pct:Q"],
                 )
             )
-            st.altair_chart(chart.properties(height=280), use_container_width=True)
+            st.altair_chart(chart_flo.properties(height=280), use_container_width=True)
+
+        # ---- POX table + chart
+        st.markdown("#### POX 100%")
+        st.dataframe(df_pox, use_container_width=True)
+
+        if df_pox["Au_cutoff_gpt"].notna().any():
+            st.info(
+                f"POX range: {df_pox['Au_cutoff_gpt'].min():.3f} g/t – "
+                f"{df_pox['Au_cutoff_gpt'].max():.3f} g/t"
+            )
+
+        df_pox_plot = df_pox.dropna(subset=["Au_cutoff_gpt"]).copy()
+        if not df_pox_plot.empty:
+            st.markdown("##### Plot: POX Au cut-off by MetType")
+            chart_pox = (
+                alt.Chart(df_pox_plot)
+                .mark_bar()
+                .encode(
+                    x=alt.X("MetType:N", sort=None, title="MetType"),
+                    y=alt.Y("Au_cutoff_gpt:Q", title="Au cut-off (g/t)"),
+                    tooltip=["MetType:N", "Au_cutoff_gpt:Q", "Au_recovery_at_cutoff_pct:Q"],
+                )
+            )
+            st.altair_chart(chart_pox.properties(height=280), use_container_width=True)
 
 # End of script
